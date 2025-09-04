@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'presentation/screens/splash_screen.dart';
+import 'presentation/screens/login_screen.dart';
+import 'core/theme/app_colors.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,22 +19,28 @@ class SimplePosApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Bank of America POS Demo',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-        primaryColor: const Color(0xFF1565C0),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF1565C0),
-          foregroundColor: Colors.white,
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider(create: (context) => CartBloc()),
+        BlocProvider(create: (context) => TransactionBloc()),
+      ],
+      child: MaterialApp(
+        title: 'EFP Pay',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          primarySwatch: Colors.blue,
+          primaryColor: AppColors.primaryBlue,
+          appBarTheme: const AppBarTheme(
+            backgroundColor: AppColors.primaryBlue,
+            foregroundColor: Colors.white,
+          ),
         ),
-      ),
-      home: MultiBlocProvider(
-        providers: [
-          BlocProvider(create: (context) => CartBloc()),
-          BlocProvider(create: (context) => TransactionBloc()),
-        ],
-        child: const MainNavigationScreen(),
+        initialRoute: '/',
+        routes: {
+          '/': (context) => const SplashScreen(),
+          '/login': (context) => const LoginScreen(),
+          '/home': (context) => const MainNavigationScreen(),
+        },
       ),
     );
   }
@@ -145,7 +154,8 @@ abstract class TransactionEvent {}
 class ProcessPayment extends TransactionEvent {
   final double amount;
   final String paymentMethod;
-  ProcessPayment(this.amount, this.paymentMethod);
+  final String? description;
+  ProcessPayment(this.amount, this.paymentMethod, {this.description});
 }
 
 abstract class TransactionState {}
@@ -156,7 +166,16 @@ class TransactionProcessing extends TransactionState {}
 
 class TransactionSuccess extends TransactionState {
   final String transactionId;
-  TransactionSuccess(this.transactionId);
+  final double amount;
+  final String paymentMethod;
+  final String? description;
+  
+  TransactionSuccess({
+    required this.transactionId,
+    required this.amount,
+    required this.paymentMethod,
+    this.description,
+  });
 }
 
 class TransactionError extends TransactionState {
@@ -177,7 +196,12 @@ class TransactionBloc extends Bloc<TransactionEvent, TransactionState> {
     
     // Random success/failure for demo
     if (DateTime.now().millisecond % 10 != 0) {
-      emit(TransactionSuccess('TXN-${DateTime.now().millisecondsSinceEpoch}'));
+      emit(TransactionSuccess(
+        transactionId: 'TXN-${DateTime.now().millisecondsSinceEpoch}',
+        amount: event.amount,
+        paymentMethod: event.paymentMethod,
+        description: event.description,
+      ));
     } else {
       emit(TransactionError('Payment declined'));
     }
@@ -197,8 +221,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   final List<Widget> _pages = [
     const DashboardPage(),
-    const ProductsPage(),
     const QuickSalePage(),
+    const ProductsPage(),
     const CartPage(),
     const AnalyticsScreen(),
   ];
@@ -210,11 +234,16 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         if (state is TransactionSuccess) {
           context.read<CartBloc>().add(ClearCart());
           
-          // Clear Quick Sale form if we're on that page
-          if (_selectedIndex == 2) {
-            // Find QuickSalePage and clear its form
-            final quickSaleState = context.findAncestorStateOfType<_QuickSalePageState>();
-            quickSaleState?._clearForm();
+          // Show receipt for Quick Sale transactions
+          if (_selectedIndex == 1) {
+            // Show receipt dialog with the transaction details from the state
+            _showReceiptDialog(
+              context,
+              state.transactionId,
+              state.amount.toStringAsFixed(2),
+              state.description ?? '',
+              state.paymentMethod,
+            );
           }
           
           ScaffoldMessenger.of(context).showSnackBar(
@@ -253,7 +282,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 });
               },
               type: BottomNavigationBarType.fixed,
-              selectedItemColor: const Color(0xFF1565C0),
+              selectedItemColor: AppColors.primaryBlue,
               unselectedItemColor: Colors.grey[600],
               items: [
                 const BottomNavigationBarItem(
@@ -261,12 +290,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                   label: 'Dashboard',
                 ),
                 const BottomNavigationBarItem(
-                  icon: Icon(Icons.store),
-                  label: 'Products',
-                ),
-                const BottomNavigationBarItem(
                   icon: Icon(Icons.point_of_sale),
                   label: 'Quick Sale',
+                ),
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.store),
+                  label: 'Products',
                 ),
                 BottomNavigationBarItem(
                   icon: cartState.items.isNotEmpty
@@ -288,6 +317,25 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       ),
     );
   }
+  
+  void _showReceiptDialog(BuildContext context, String transactionId, String amount, String description, String paymentMethod) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return ReceiptDialog(
+          transactionId: transactionId,
+          amount: amount,
+          description: description,
+          paymentMethod: paymentMethod,
+          onClose: () {
+            Navigator.of(context).pop();
+            // Stay on the same page after closing receipt
+          },
+        );
+      },
+    );
+  }
 }
 
 // Dashboard Page - Main Summary View
@@ -298,7 +346,7 @@ class DashboardPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Bank of America POS'),
+        title: const Text('EFP Pay'),
         centerTitle: true,
         actions: [
           IconButton(
@@ -322,11 +370,7 @@ class DashboardPage extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF1565C0), Color(0xFF1976D2)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
+                gradient: AppColors.primaryGradient,
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
@@ -431,13 +475,13 @@ class DashboardPage extends StatelessWidget {
                     context,
                     icon: Icons.add_shopping_cart,
                     label: 'New Sale',
-                    color: const Color(0xFF1565C0),
+                    color: AppColors.primaryBlue,
                     onTap: () {
                       // Navigate to Products tab
                       if (context.mounted) {
                         final state = context.findAncestorStateOfType<_MainNavigationScreenState>();
                         state?.setState(() {
-                          state._selectedIndex = 1; // Products index
+                          state._selectedIndex = 2; // Products index (moved to 3rd position)
                         });
                       }
                     },
@@ -455,7 +499,7 @@ class DashboardPage extends StatelessWidget {
                       if (context.mounted) {
                         final state = context.findAncestorStateOfType<_MainNavigationScreenState>();
                         state?.setState(() {
-                          state._selectedIndex = 2; // Quick Sale index
+                          state._selectedIndex = 1; // Quick Sale index (moved to 2nd position)
                         });
                       }
                     },
@@ -655,7 +699,7 @@ class DashboardPage extends StatelessWidget {
                 style: const TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
-                  color: Color(0xFF1565C0),
+                  color: AppColors.primaryBlue,
                 ),
               ),
               Text(
@@ -721,19 +765,26 @@ class _QuickSalePageState extends State<QuickSalePage> {
   
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Quick Sale'),
-        centerTitle: true,
-      ),
-      body: Column(
+    return BlocListener<TransactionBloc, TransactionState>(
+      listener: (context, state) {
+        if (state is TransactionSuccess) {
+          // Clear the form after successful transaction
+          _clearForm();
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Quick Sale'),
+          centerTitle: true,
+        ),
+        body: Column(
         children: [
           // Amount Display
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
             decoration: BoxDecoration(
-              color: const Color(0xFF1565C0).withOpacity(0.05),
+              color: AppColors.primaryBlue.withOpacity(0.05),
               border: Border(
                 bottom: BorderSide(color: Colors.grey.shade300),
               ),
@@ -743,47 +794,50 @@ class _QuickSalePageState extends State<QuickSalePage> {
                 const Text(
                   'Enter Amount',
                   style: TextStyle(
-                    fontSize: 16,
+                    fontSize: 14,
                     color: Colors.grey,
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
                 TextField(
                   controller: _amountController,
                   readOnly: true,
                   textAlign: TextAlign.center,
                   style: const TextStyle(
-                    fontSize: 48,
+                    fontSize: 36,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFF1565C0),
+                    color: AppColors.primaryBlue,
                   ),
                   decoration: const InputDecoration(
                     prefixText: '\$',
                     prefixStyle: TextStyle(
-                      fontSize: 48,
+                      fontSize: 36,
                       fontWeight: FontWeight.bold,
-                      color: Color(0xFF1565C0),
+                      color: AppColors.primaryBlue,
                     ),
                     border: InputBorder.none,
                     hintText: '0.00',
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 // Description Field
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 32),
                   child: TextField(
                     controller: _descriptionController,
                     textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 14),
                     decoration: InputDecoration(
                       hintText: 'Add description (optional)',
+                      hintStyle: const TextStyle(fontSize: 14),
                       filled: true,
                       fillColor: Colors.white,
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
                         borderSide: BorderSide.none,
                       ),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     ),
                   ),
                 ),
@@ -793,7 +847,7 @@ class _QuickSalePageState extends State<QuickSalePage> {
           
           // Payment Method Selection
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -809,12 +863,14 @@ class _QuickSalePageState extends State<QuickSalePage> {
           // Number Pad
           Expanded(
             child: Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: GridView.count(
                 crossAxisCount: 3,
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 12,
-                childAspectRatio: 1.5,
+                mainAxisSpacing: 6,
+                crossAxisSpacing: 6,
+                childAspectRatio: 1.8,
+                physics: const NeverScrollableScrollPhysics(),
+                shrinkWrap: true,
                 children: [
                   _buildNumberButton('1'),
                   _buildNumberButton('2'),
@@ -874,7 +930,11 @@ class _QuickSalePageState extends State<QuickSalePage> {
                                   final amount = double.tryParse(_amountController.text);
                                   if (amount != null && amount > 0) {
                                     context.read<TransactionBloc>().add(
-                                      ProcessPayment(amount, _selectedPaymentMethod),
+                                      ProcessPayment(
+                                        amount,
+                                        _selectedPaymentMethod,
+                                        description: _descriptionController.text,
+                                      ),
                                     );
                                   }
                                 },
@@ -904,6 +964,7 @@ class _QuickSalePageState extends State<QuickSalePage> {
                                       : 'CHARGE \$${_amountController.text}',
                                   style: const TextStyle(
                                     fontSize: 16,
+                                    color: AppColors.primaryBlue,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
@@ -916,6 +977,7 @@ class _QuickSalePageState extends State<QuickSalePage> {
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -932,7 +994,7 @@ class _QuickSalePageState extends State<QuickSalePage> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF1565C0) : Colors.grey[200],
+          color: isSelected ? AppColors.primaryBlue : Colors.grey[200],
           borderRadius: BorderRadius.circular(20),
         ),
         child: Row(
@@ -960,11 +1022,11 @@ class _QuickSalePageState extends State<QuickSalePage> {
   Widget _buildNumberButton(String value, {bool isBackspace = false}) {
     return InkWell(
       onTap: () => _appendToAmount(value),
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(8),
       child: Container(
         decoration: BoxDecoration(
           color: isBackspace ? Colors.orange[50] : Colors.grey[100],
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: isBackspace ? Colors.orange.withOpacity(0.3) : Colors.grey[300]!,
           ),
@@ -973,7 +1035,7 @@ class _QuickSalePageState extends State<QuickSalePage> {
           child: Text(
             value,
             style: TextStyle(
-              fontSize: 24,
+              fontSize: 20,
               fontWeight: FontWeight.bold,
               color: isBackspace ? Colors.orange : Colors.black87,
             ),
@@ -1035,7 +1097,7 @@ class ProductsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Bank of America POS'),
+        title: const Text('EFP Pay'),
         centerTitle: true,
       ),
       body: Container(
@@ -1193,7 +1255,7 @@ class CartPage extends StatelessWidget {
                                   style: const TextStyle(
                                     fontSize: 20,
                                     fontWeight: FontWeight.bold,
-                                    color: Color(0xFF1565C0),
+                                    color: AppColors.primaryBlue,
                                   ),
                                 ),
                               ],
@@ -1228,7 +1290,7 @@ class CartPage extends StatelessWidget {
                                       ? null
                                       : () {
                                           context.read<TransactionBloc>().add(
-                                            ProcessPayment(state.total, 'Credit Card'),
+                                            ProcessPayment(state.total, 'Credit Card', description: 'Cart Purchase'),
                                           );
                                         },
                                   style: ElevatedButton.styleFrom(
@@ -1330,7 +1392,7 @@ class ProductCard extends StatelessWidget {
                 style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.bold,
-                  color: Color(0xFF1565C0),
+                  color: AppColors.primaryBlue,
                 ),
               ),
               
@@ -1437,7 +1499,7 @@ class CartPanel extends StatelessWidget {
                           style: const TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFF1565C0),
+                            color: AppColors.primaryBlue,
                           ),
                         ),
                       ],
@@ -1451,7 +1513,7 @@ class CartPanel extends StatelessWidget {
                             onPressed: transactionState is TransactionProcessing
                                 ? null
                                 : () => context.read<TransactionBloc>().add(
-                                      ProcessPayment(state.total, 'Credit Card'),
+                                      ProcessPayment(state.total, 'Credit Card', description: 'Cart Purchase'),
                                     ),
                             child: transactionState is TransactionProcessing
                                 ? const SizedBox(
@@ -1548,7 +1610,7 @@ class CartItemTile extends StatelessWidget {
                 'Total: \$${(item.product.price * item.quantity).toStringAsFixed(2)}',
                 style: const TextStyle(
                   fontWeight: FontWeight.bold,
-                  color: Color(0xFF1565C0),
+                  color: AppColors.primaryBlue,
                 ),
               ),
             ),
@@ -1648,7 +1710,7 @@ class AnalyticsScreen extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Icon(icon, color: const Color(0xFF1565C0)),
+                Icon(icon, color: AppColors.primaryBlue),
                 Text(
                   change,
                   style: const TextStyle(
@@ -1667,7 +1729,7 @@ class AnalyticsScreen extends StatelessWidget {
               style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
-                color: Color(0xFF1565C0),
+                color: AppColors.primaryBlue,
               ),
             ),
           ],
@@ -1702,7 +1764,7 @@ class SettingsPage extends StatelessWidget {
           _buildSettingsTile(
             icon: Icons.location_on,
             title: 'Store Address',
-            subtitle: '100 N Tryon St, Charlotte, NC',
+            subtitle: '2505 W CHANDLER BLVD, AZ, Chandler, 85224',
             onTap: () {},
           ),
           _buildSettingsTile(
@@ -1816,6 +1878,11 @@ class SettingsPage extends StatelessWidget {
                       TextButton(
                         onPressed: () {
                           Navigator.of(context).pop();
+                          // Navigate to login screen
+                          Navigator.of(context).pushNamedAndRemoveUntil(
+                            '/login',
+                            (route) => false,
+                          );
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text('Signed out successfully'),
@@ -1844,7 +1911,7 @@ class SettingsPage extends StatelessWidget {
         style: const TextStyle(
           fontSize: 16,
           fontWeight: FontWeight.bold,
-          color: Color(0xFF1565C0),
+          color: AppColors.primaryBlue,
         ),
       ),
     );
@@ -1859,7 +1926,7 @@ class SettingsPage extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 2),
       child: ListTile(
-        leading: Icon(icon, color: const Color(0xFF1565C0)),
+        leading: Icon(icon, color: AppColors.primaryBlue),
         title: Text(
           title,
           style: const TextStyle(fontWeight: FontWeight.w500),
@@ -1870,6 +1937,491 @@ class SettingsPage extends StatelessWidget {
         ),
         trailing: const Icon(Icons.chevron_right, color: Colors.grey),
         onTap: onTap,
+      ),
+    );
+  }
+}
+
+// Receipt Dialog Widget
+class ReceiptDialog extends StatelessWidget {
+  final String transactionId;
+  final String amount;
+  final String description;
+  final String paymentMethod;
+  final VoidCallback onClose;
+
+  const ReceiptDialog({
+    super.key,
+    required this.transactionId,
+    required this.amount,
+    required this.description,
+    required this.paymentMethod,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final formattedDate = '${now.month}/${now.day}/${now.year}';
+    final formattedTime = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    
+    return Dialog(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 400, maxHeight: 600),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Header
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
+              decoration: const BoxDecoration(
+                color: AppColors.primaryBlue,
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  topRight: Radius.circular(16),
+                ),
+              ),
+              child: const Column(
+                children: [
+                  Icon(
+                    Icons.receipt_long,
+                    color: Colors.white,
+                    size: 48,
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Transaction Receipt',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            
+            // Receipt Content
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Store Info
+                    const Center(
+                      child: Column(
+                        children: [
+                          Text(
+                            'EFP Pay',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            '2505 W CHANDLER BLVD, AZ, Chandler, 85224',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                          Text(
+                            '(704) 386-5681',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                    ),
+                    
+                    const SizedBox(height: 24),
+                    const Divider(),
+                    
+                    // Transaction Details
+                    _buildReceiptRow('Date:', formattedDate),
+                    _buildReceiptRow('Time:', formattedTime),
+                    _buildReceiptRow('Transaction ID:', transactionId),
+                    _buildReceiptRow('Payment Method:', paymentMethod),
+                    
+                    if (description.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      _buildReceiptRow('Description:', description),
+                    ],
+                    
+                    const SizedBox(height: 16),
+                    const Divider(),
+                    
+                    // Amount Details
+                    _buildReceiptRow('Subtotal:', '\$$amount', isBold: false),
+                    _buildReceiptRow('Tax (8.25%):', '\$${((double.tryParse(amount) ?? 0) * 0.0825).toStringAsFixed(2)}', isBold: false),
+                    
+                    const SizedBox(height: 8),
+                    const Divider(thickness: 2),
+                    
+                    _buildReceiptRow(
+                      'TOTAL:',
+                      '\$${((double.tryParse(amount) ?? 0) * 1.0825).toStringAsFixed(2)}',
+                      isBold: true,
+                      fontSize: 20,
+                    ),
+                    
+                    const SizedBox(height: 24),
+                    
+                    // Status
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.green.withOpacity(0.3)),
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.check_circle, color: Colors.green),
+                          SizedBox(width: 8),
+                          Text(
+                            'PAYMENT APPROVED',
+                            style: TextStyle(
+                              color: Colors.green,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    
+                    const SizedBox(height: 20),
+                    const Center(
+                      child: Text(
+                        'Thank you for your business!',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontStyle: FontStyle.italic,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            
+            // Action Buttons
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.grey[50],
+                borderRadius: const BorderRadius.only(
+                  bottomLeft: Radius.circular(16),
+                  bottomRight: Radius.circular(16),
+                ),
+              ),
+              child: Column(
+                children: [
+                  // Virtual Receipt Button
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () => _showVirtualReceiptOptions(context),
+                      icon: const Icon(Icons.email),
+                      label: const Text('Send Virtual Receipt'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primaryBlue,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 12),
+                  
+                  // Action Buttons Row
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            // Print receipt (placeholder)
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Print receipt feature coming soon'),
+                                duration: Duration(seconds: 2),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.print),
+                          label: const Text('Print'),
+                        ),
+                      ),
+                      
+                      const SizedBox(width: 12),
+                      
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: onClose,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.grey[600],
+                          ),
+                          child: const Text('Done'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildReceiptRow(String label, String value, {bool isBold = false, double? fontSize}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+              fontSize: fontSize,
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+              fontSize: fontSize,
+              color: isBold ? AppColors.primaryBlue : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  void _showVirtualReceiptOptions(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => VirtualReceiptOptions(
+        transactionId: transactionId,
+        amount: amount,
+      ),
+    );
+  }
+}
+
+// Virtual Receipt Options Widget
+class VirtualReceiptOptions extends StatelessWidget {
+  final String transactionId;
+  final String amount;
+
+  const VirtualReceiptOptions({
+    super.key,
+    required this.transactionId,
+    required this.amount,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle bar
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          
+          const SizedBox(height: 20),
+          
+          const Text(
+            'Send Virtual Receipt',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          
+          const SizedBox(height: 8),
+          
+          Text(
+            'Choose how to send the receipt for transaction $transactionId',
+            style: TextStyle(
+              color: Colors.grey[600],
+              fontSize: 14,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          
+          const SizedBox(height: 24),
+          
+          // Email Option
+          ListTile(
+            leading: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.email, color: Colors.blue),
+            ),
+            title: const Text(
+              'Email Receipt',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            subtitle: const Text('Send receipt to customer\'s email'),
+            trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+            onTap: () {
+              Navigator.pop(context);
+              _showEmailDialog(context);
+            },
+          ),
+          
+          const SizedBox(height: 8),
+          
+          // SMS Option
+          ListTile(
+            leading: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.sms, color: Colors.green),
+            ),
+            title: const Text(
+              'Text Message',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            subtitle: const Text('Send receipt via SMS'),
+            trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+            onTap: () {
+              Navigator.pop(context);
+              _showSMSDialog(context);
+            },
+          ),
+          
+          const SizedBox(height: 20),
+          
+          // Cancel Button
+          SizedBox(
+            width: double.infinity,
+            child: TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+          ),
+          
+          SizedBox(height: MediaQuery.of(context).padding.bottom),
+        ],
+      ),
+    );
+  }
+  
+  void _showEmailDialog(BuildContext context) {
+    final emailController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Send Email Receipt'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Enter customer\'s email address:'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: emailController,
+              keyboardType: TextInputType.emailAddress,
+              decoration: const InputDecoration(
+                labelText: 'Email Address',
+                prefixIcon: Icon(Icons.email),
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Receipt sent to ${emailController.text}'),
+                  backgroundColor: Colors.green,
+                  duration: const Duration(seconds: 3),
+                ),
+              );
+            },
+            child: const Text('Send'),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  void _showSMSDialog(BuildContext context) {
+    final phoneController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Send SMS Receipt'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Enter customer\'s phone number:'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: phoneController,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                labelText: 'Phone Number',
+                prefixIcon: Icon(Icons.phone),
+                border: OutlineInputBorder(),
+                hintText: '(555) 123-4567',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Receipt sent to ${phoneController.text}'),
+                  backgroundColor: Colors.green,
+                  duration: const Duration(seconds: 3),
+                ),
+              );
+            },
+            child: const Text('Send'),
+          ),
+        ],
       ),
     );
   }
