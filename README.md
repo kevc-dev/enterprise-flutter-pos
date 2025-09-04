@@ -5,10 +5,10 @@ A comprehensive Flutter Point of Sale (POS) application developed for Bank of Am
 ## 📹 Demo
 
 ### 🎬 Application Overview
-![EFP Pay Demo](demo.gif)
+<img src="demo.gif" alt="EFP Pay Demo" width="400">
 
 ### 💳 Transaction Processing
-![Transaction Demo](transaction_demo.gif)
+<img src="transaction_demo.gif" alt="Transaction Demo" width="400">
 
 
 ## 🏗️ Architecture Overview
